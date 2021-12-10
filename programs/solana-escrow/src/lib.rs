@@ -10,6 +10,16 @@ TODO
 - ADDITIONs
 - TODOs
 
+- What if Offer account is user-owned? !!!
+- Box
+- Why pass in these:
+- - - escrowed_maker_tokens
+- - - offer_maker
+- - - offer_takers_taker_tokens
+- - - offer_takers_maker_tokens
+- - - taker_mint
+- - - 
+
 */
 
 /*
@@ -98,7 +108,8 @@ pub struct Make<'info> {
     - taker_mint: What's the desired mint type? (Amounts not in ctx because they're not accounts)
     - rent, system_program, token_program required by anchor
     */
-     // offer: accounts can only be owned by program, so program owns Offer.
+
+     // offer: accounts can only be owned by program, so program owns Offer. Only an account's owning program can make changes to it. So `offer` can only be modified by the program.
      // Nobody has "authority" over the account. Authority is a higher-level concept in solana, and you have to bake it into your program if you want it
      // There's no need for authority; the program can write to the offer account whenever it wants (based on its instructions)
     #[account(init, payer = offer_maker, space = 8 + 32 + 32 + 8 + 1)]
@@ -108,7 +119,7 @@ pub struct Make<'info> {
     #[account(mut, constraint = (
         (offer_makers_maker_tokens.mint == maker_mint.key()) &&
         (offer_makers_maker_tokens.owner == *offer_maker.key) &&
-        (offer_makers_maker_tokens.amount >= maker_mint_amt)
+        (offer_makers_maker_tokens.amount >= offer_maker_amount)
     ))]
     pub offer_makers_maker_tokens: Account<'info, TokenAccount>,
 
@@ -148,20 +159,45 @@ pub struct Make<'info> {
 
 #[derive(Accounts)]
 pub struct Accept<'info> {
+    // Account<'info, Whatever> verifies that the account is owned by whichever program Whatever says should own it
+    // So for this case, "Offer" says that our current program should own the Offer account because we made the "Offer" account.
+    // But for Account<'info, TokenAccount>, Anchor will verify that the Token program owns the passed-in TokenAccount
     #[account(
         mut,
-        constraint = offer.
-        // BUG: Offer is a user-owned account. What would happen then?
+        // Make sure the offer_maker account really is whoever made the offer!
+        // Otherwise, we might transfer vault funds into a hacker's account!
+        constraint = offer.maker == *offer_maker.key,
+        // at the end of the instruction, close the offer account (don't need it
+        // anymore) and send its rent back to the offer_maker
+        close = offer_maker
     )]
-    pub offer: Account<'info, Offer>, 
-    #[account(mut)]
-    pub taker: Signer<'info>,
-    #[account(mut, constraint = (
-        takers_taker_tokens.owner == *taker.key
+    pub offer: Account<'info, Offer>,
+
+    #[account(mut)]  // need to pass this in because we need to access data from the account (e.g. amount) and remove balance from account
+    pub escrowed_maker_tokens: Account<'info, TokenAccount>,
+
+    // we need to pass this and `taker_mint` in because the init of `offer_makers_taker_tokens` requires it
+    pub offer_maker: AccountInfo<'info>,
+    pub offer_taker: Signer<'info>,
+
+    #[account(
+        mut,
+        associated_token::mint = taker_mint,
+        associated_token::authority = offer_maker,
+    )]
+    pub offer_makers_taker_tokens: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut, 
+        // double check that the offer_taker is putting up the right kind of
+        // tokens!
+        constraint = (
+            offer_takers_taker_tokens.mint == offer.taker_mint
     ))]
-    pub takers_taker_tokens: Account<'info, TokenAccount>,
-    // #[account(address = offer.taker_mint)]
-    pub taker_mint: Account<'info, Mint>
+    pub offer_takers_taker_tokens: Account<'info, TokenAccount>,
+    // `address` is shorthand for constraint. `has_one` would be more canonical
+    #[account(address = offer.taker_mint)]
+    pub taker_mint: Account<'info, Mint>,  
     pub token_program: Program<'info, Token>,  // Automatically checks to make sure this value equals spl_token::id()
 }
 
