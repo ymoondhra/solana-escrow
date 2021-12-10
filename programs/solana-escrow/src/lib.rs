@@ -10,15 +10,7 @@ TODO
 - ADDITIONs
 - TODOs
 
-- What if Offer account is user-owned? !!!
 - Box
-- Why pass in these:
-- - - escrowed_maker_tokens
-- - - offer_maker
-- - - offer_takers_taker_tokens
-- - - offer_takers_maker_tokens
-- - - taker_mint
-- - - 
 
 */
 
@@ -73,10 +65,61 @@ pub mod solana_escrow {
     }
 
     pub fn accept(ctx: Context<Accept>) -> ProgramResult {
+        // Transfer the taker's tokens to the maker.
+        anchor_spl::token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    // Don't need to worry about the accepter sneakily providing
+                    // the wrong kind of tokens because we've already checked
+                    // that while deriving Accounts for the Accept struct.
+                    from: ctx.accounts.offer_takers_taker_tokens.to_account_info(),
+                    to: ctx.accounts.offer_makers_taker_tokens.to_account_info(),
+                    // The offer_taker had to sign from the client
+                    authority: ctx.accounts.offer_taker.to_account_info(),
+                },
+            ),
+            // The necessary amount was set by the offer maker.
+            ctx.accounts.offer.taker_amount,
+        )?;
 
-        //  TODO: (takers_taker_tokens.amount >= offer.escrowed_maker_tokens.taker_amount)
-        //        (takers_taker_tokens.mint == offer.escrowed_maker_tokens.taker_mint.key()) &&
+        // Transfer the maker's tokens (the ones they escrowed) to the taker.
+        anchor_spl::token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    from: ctx.accounts.escrowed_maker_tokens.to_account_info(),
+                    to: ctx.accounts.offer_takers_maker_tokens.to_account_info(),
+                    // Cute trick: the escrowed_maker_tokens is its own
+                    // authority/owner (and a PDA, so our program can sign for
+                    // it just below)
+                    authority: ctx.accounts.escrowed_maker_tokens.to_account_info(),
+                },
+                &[&[
+                    ctx.accounts.offer.key().as_ref(),
+                    &[ctx.accounts.offer.escrowed_maker_tokens_bump],
+                ]],
+            ),
+            // The amount here is just the entire balance of the escrow account.
+            ctx.accounts.escrowed_maker_tokens.amount,
+        )?;
+
         Ok(())
+
+        // // Finally, close the escrow account and refund the maker (they paid for
+        // // its rent-exemption).
+        // anchor_spl::token::close_account(CpiContext::new_with_signer(
+        //     ctx.accounts.token_program.to_account_info(),
+        //     anchor_spl::token::CloseAccount {
+        //         account: ctx.accounts.escrowed_maker_tokens.to_account_info(),
+        //         destination: ctx.accounts.offer_maker.to_account_info(),
+        //         authority: ctx.accounts.escrowed_maker_tokens.to_account_info(),
+        //     },
+        //     &[&[
+        //         ctx.accounts.offer.key().as_ref(),
+        //         &[ctx.accounts.offer.escrowed_maker_tokens_bump],
+        //     ]],
+        // ))
     }
 
     pub fn cancel(ctx: Context<Cancel>) -> ProgramResult {
@@ -173,7 +216,15 @@ pub struct Accept<'info> {
     )]
     pub offer: Account<'info, Offer>,
 
-    #[account(mut)]  // need to pass this in because we need to access data from the account (e.g. amount) and remove balance from account
+    // Need to pass this in because we need to access data from the account (e.g. amount) and remove balance from account
+    // Massive bug fix: need to verify that the escrow account belongs to the offer! Otherwise, user can take funds from any escrowed_maker_tokens. 
+    // (Actually, we don't REALLY need to verify this because the offer can't sign for any other escrowed_maker_tokens)
+    // That's why we add `seeds` and `bump` checks
+    #[account(  
+        mut,  
+        seeds = [offer.key().as_ref()],  
+        bump = offer.escrowed_maker_tokens_bump  
+    )]
     pub escrowed_maker_tokens: Account<'info, TokenAccount>,
 
     // we need to pass this and `taker_mint` in because the init of `offer_makers_taker_tokens` requires it
@@ -195,9 +246,12 @@ pub struct Accept<'info> {
             offer_takers_taker_tokens.mint == offer.taker_mint
     ))]
     pub offer_takers_taker_tokens: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub offer_takers_maker_tokens: Account<'info, TokenAccount>,
     // `address` is shorthand for constraint. `has_one` would be more canonical
     #[account(address = offer.taker_mint)]
     pub taker_mint: Account<'info, Mint>,  
+
     pub token_program: Program<'info, Token>,  // Automatically checks to make sure this value equals spl_token::id()
 }
 

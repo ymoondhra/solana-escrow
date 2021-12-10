@@ -96,9 +96,15 @@ describe('solana-escrow', () => {
 
   it('lets you make and accept offers', async () => {
     const offer = anchor.web3.Keypair.generate();
+    const offer2 = anchor.web3.Keypair.generate();
 
     const [escrowedMakerTokens, escrowedMakerTokensBump] = await anchor.web3.PublicKey.findProgramAddress(
       [offer.publicKey.toBuffer()],
+      program.programId
+    );
+
+    const [escrowedMakerTokens2, escrowedMakerTokensBump2] = await anchor.web3.PublicKey.findProgramAddress(
+      [offer2.publicKey.toBuffer()],
       program.programId
     );
 
@@ -126,6 +132,32 @@ describe('solana-escrow', () => {
       }
     );
 
+    const txn2 = await program.rpc.make(
+      escrowedMakerTokensBump2,
+      new anchor.BN(100),
+      new anchor.BN(200),
+      {
+        accounts: {
+          offer: offer2.publicKey,
+          offerMaker: program.provider.wallet.publicKey,
+          offerMakersMakerTokens: offerMakersMakerTokens,
+          escrowedMakerTokens: escrowedMakerTokens2,
+          makerMint: makerMint.publicKey,
+          takerMint: takerMint.publicKey,
+          tokenProgram: spl.TOKEN_PROGRAM_ID,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        },
+        // (Almost) any time you create an account, the address needs to sign.
+        // We are creating escrowedMakerTokens, so the owner (PDA) needs to sign as well.
+        // We don't need to add the PDA as a signer because PDA can't sign from client (because they're not actually public keys). 
+        // Solana will realize it's a PDA of the program.
+        signers: [offer2],  // would need to add offer_maker but it's program.provider.wallet so we don't need to
+      }
+    );
+
+    console.log("GOT TILL HERE!")
+
     // We want to fetch lamport balance, so we can't use the higher-level `makerMint.getAccountInfo` for that.
     // We need to use the lower-level getAccountInfo, because that will tell us the lamport balance
     // Note: lamports and solana balance are not necessarily the same: https://discord.com/channels/428295358100013066/517163444747894795/918629680691675176
@@ -137,10 +169,30 @@ describe('solana-escrow', () => {
     )
     assert.equal(escrowedMakerTokensAccountInfo.lamports, minRent)
 
-    // assert.equal(100, (await makerMint.getAccountInfo(escrowedMakerTokens)).amount.toNumber());
+    // Check the escrow has the right amount.
+    assert.equal(100, (await makerMint.getAccountInfo(escrowedMakerTokens)).amount.toNumber());
 
     await program.rpc.accept({
-      // TODO
-    })
+      accounts: {
+        offer: offer.publicKey,
+        escrowedMakerTokens: escrowedMakerTokens,
+        offerMaker: program.provider.wallet.publicKey,
+        offerMakersTakerTokens: offerMakersTakerTokens,
+        offerTaker: offerTaker.publicKey,
+        offerTakersMakerTokens: offerTakersMakerTokens,
+        offerTakersTakerTokens: offerTakersTakerTokens,
+        takerMint: takerMint.publicKey,
+        tokenProgram: spl.TOKEN_PROGRAM_ID,
+      },
+      signers: [offerTaker]
+    });
+
+    assert.equal(100, (await makerMint.getAccountInfo(offerTakersMakerTokens)).amount.toNumber());
+    assert.equal(200, (await takerMint.getAccountInfo(offerMakersTakerTokens)).amount.toNumber());
+
+    // The underlying offer account got closed when the offer got cancelled.
+    assert.equal(null, await program.provider.connection.getAccountInfo(offer.publicKey));
+    // The escrow account got closed when the offer got accepted.
+    assert.equal(null, await program.provider.connection.getAccountInfo(escrowedMakerTokens));
   });
 });
