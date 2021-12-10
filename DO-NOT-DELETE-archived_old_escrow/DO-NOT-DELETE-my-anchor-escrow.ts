@@ -51,10 +51,10 @@ describe('my-anchor-escrow', () => {
     // Create mint tokens (a and b): https://www.quicknode.com/guides/web3-sdks/how-to-mint-an-nft-on-solana
     mintA = await Token.createMint(
       provider.connection,
-      mintMaker, // the payer. will pay txn + rent fees
-      mintAuthority.publicKey, // authority over token given to this address
+      mintMaker, 
+      mintAuthority.publicKey,
       null,
-      9, // most mints have 9 decimal places
+      9, 
       TOKEN_PROGRAM_ID,
     );
 
@@ -94,7 +94,7 @@ describe('my-anchor-escrow', () => {
     await mintB.mintTo(  // txn fee paid by mintMaker
       takerDepositAccount,
       mintAuthority.publicKey,
-      [mintAuthority],  // signer
+      [mintAuthority],  
       MINTB_REQUIRED,
     );      
   })
@@ -121,9 +121,6 @@ describe('my-anchor-escrow', () => {
           systemProgram: anchor.web3.SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
         },
-        // (Almost) any time you create an account, the address needs to sign.
-        // We are creating vault_account, so the owner (PDA) needs to sign as well.
-        // We don't add it as a signer because PDA can't sign from client (because they're not actually public keys)
         signers: [escrowAccount],
       }
     );
